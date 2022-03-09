@@ -1,0 +1,467 @@
+---
+title: "Victoria Road Crashes"
+author: "Nayeem Bhuiyan"
+date: "14/09/2021"
+output: html_document
+---
+
+
+Road Traffic crash data are useful tools to support the development and implementation of road safety programs that leads to reduced road 
+traffic accidents and in turn saves people's lives. This report represents my analysis for the Victoria road crashes from July 2014 to
+June 2019. Through the various data transformation and visualisation tools I will look for data insights and share my observation with Victoria Department of Transport.
+
+
+### Problem description and questions
+
+This dataset documents crashes on Victorian roads during the five year reporting period from July 2014 to June 2019. This data gives me the 
+opportunity to analyse Victorian fatal and injury crash data based on time, locations, conditions, crash type, road user type etc. For
+this analysis I will mainly focus on finding answers to the following questions by means of exploration and visualisation.
+
+* Accident frequency: How has the accident frequency changed over the years?
+
+* Daily traffic trend: Was a particular day of the week more prone to accidents?
+
+* Rush hours' impact on accidents: Was a particular time of the day(morning rush/evening rush) more prone to accidents?
+
+* Most impacted regions: How are the accidents distributed across regions? How does it trend over the years?
+
+* Alcohol consumption time and light condition: How are alcohol time and overall visibility contributed to the accidents?
+
+* Effect of different speed limits: How has the various speed zones affected the severity of the accidents?
+
+* Accident type: How does the collision type affect severity of the accidents?
+
+The outcome of the analysis would guide Victoria Department of Transport manage their road safety campaign more efficiently and target investment 
+and resources in the core areas of need and concern.
+
+
+### Data explanation
+
+```{r}
+# importing necessary libraries
+library(tidyverse)
+library(dplyr)
+library(visdat)
+library(lubridate)
+library(ggplot2)
+library(plotly)
+```
+
+```{r}
+# reading data from csv file
+crashes_data <- read_csv("Road_Crashes_for_five_Years_-_Victoria.csv")
+# changing variable names to lower cases for better legibility
+names(crashes_data) <- tolower(names(crashes_data))
+# returning first six rows 
+head(crashes_data)
+```
+```{r}
+# printing structure of data
+str(crashes_data)
+```
+
+```{r}
+dim(crashes_data)
+```
+
+The Road Crashes data for Victoria from July 2014 to June 2019 was downloaded from [Victoria Department of Transport Open Data  Hub.](https://vicroadsopendata-vicroadsmaps.opendata.arcgis.com/datasets/vicroadsmaps::road-crashes-for-five-years-victoria/about).
+The data is provided by VicRoads for educational and research purposes. The data was downloaded in csv format and it contains a 
+single file. The dataset has 77513 observations and 65 features. The features include categorical and numerical variables. I get the
+impression that great deal of effort was made to collect this data and as a result, for most part it looks thorough and accurate.
+From the high level perspective, I observed that number of road crashes have been steadily reduced in last 3-4 years, vast majority of 
+the accidents though still happen in the rush hours and concentrated in two Metropolitan regions. Due to the time constraints this 
+report will analyse the Victorian fatal and injury crash data based on these key variables - accident_date, accident_time,alcoholtime,
+accident_type, day_of_week, light_condition, severity, speed_zone, total_persons, longitude, latitude and region_name.
+
+```{r}
+# selecting only the variables necessary for this analysis
+sel_crashes_data <- crashes_data %>% 
+  select(c("accident_date", "accident_time", "alcoholtime", 
+           "accident_type", "day_of_week", "light_condition", "severity", 
+           "speed_zone", "total_persons", "longitude", "latitude", 
+           "region_name"))
+```
+
+
+### Data exploration and visualisation
+
+As part of my research, I traversed through 14 non-identical plots but only present the most relevant ones in this report. To start 
+with I will run summary function to show a set of descriptive statistics for every variable.
+
+```{r}
+# extract summary data of individual objects
+summary(sel_crashes_data)
+```
+```{r}
+# get the number of missing values per column
+colSums(is.na(sel_crashes_data))
+```
+From running above function, we see 2360 values missing in day_of_week, 600 values missing in region_name and just 1 each missing in few other columns. 
+I can handle these missing values by just dropping all the rows with NA's since they represent very low percentage (2360/77000 = 3.06%) of overall data. 
+For this analysis though I will impute the missing values by filling the columns with mean/mode values to make use of all the data and get better distribution.
+
+```{r}
+# imputing null values with median value for numerical columns and mode value for categorical columns
+sel_crashes_data[] <- lapply(sel_crashes_data, function(x) {
+  if (class(x) == "character") {
+    xtab <- table(x)
+  xmode <- names(which(xtab == max(xtab)))
+  x[is.na(x)] <- xmode
+  }
+  else {
+     x[is.na(x)] <- median(x, na.rm = TRUE)
+  }
+  x
+})
+```
+
+
+```{r}
+# Checking the missing data in each column
+vis_miss(sel_crashes_data, 'warn_large_data' = FALSE)
+```
+
+If we check for missing values using vis_miss function from visdat library, we see there is no missing values exist in the data.
+
+Now I will look for the data points that are really far from the rest of the data points, also called outliers by drawing a boxplot. Removing the 
+outliers will reduce skewness of the data and improve statistical significance.
+
+```{r}
+# checking for outliers
+boxplot(sel_crashes_data[,c("total_persons")])
+```
+
+It seems like there is a lot of outliers represented by overlapping points over the box near the '0' line. One particular value in total_persons 
+though really distanced itself from the rest. I will remove this value by filtering the dataset and keep the rest to ensure data integrity.
+
+
+```{r}
+# removing outliers from the data
+sel_crashes_data <- sel_crashes_data %>% 
+  filter(total_persons < 89)
+# after removing the outliers
+boxplot(sel_crashes_data[,c("total_persons")])
+```
+
+From the above boxplot, it is pretty evident that the extreme value has now been removed. 
+
+Now I will do further exploration and visualisation of the data for analysis based on the questions defined in problem description.
+
+**How has accident frequency changed over the years?**
+
+I will first extract 'year' from 'accident_date' and then use aggregate functions to summarise 'number_of_accidents' in a tibble format. 
+Then create a line plot using geom_line function from ggplot2 library to show the distribution of the accidents over the years. In this 
+instance, line plot will be really useful to show trends in number of accidents from 2014 to 2019. By mapping year to x axis and number 
+of accidents to y axis, we will see yearly trend in the accident number. 
+
+```{r}
+# extracting year from accident_date and creating a separate 'year' column
+sel_crashes_data <-  sel_crashes_data %>% 
+  mutate(year = format(sel_crashes_data$accident_date, format = "%Y"))
+```
+
+```{r}
+# using aggregate functions to summarise the number of accidents 
+# and assigning it to the variable 'accidents_by_year'
+accidents_by_year <- sel_crashes_data %>% 
+  group_by(year) %>% 
+  summarise(number_of_accidents = n())
+accidents_by_year$year <-  as.numeric(accidents_by_year$year)
+accidents_by_year
+```
+```{r}
+# visualising the number of accidents by each year using geom_line
+year_plot <- ggplot(accidents_by_year, aes(x = year, y = number_of_accidents)) +
+             # white background with grid lines
+             theme_bw() +
+             geom_line() +
+             labs(x = "Year", 
+                  y = "Number of Accidents", 
+                  title = "Distribution of Road Crashes By Year") +
+             # center aligning the plot title
+             theme(plot.title = element_text(hjust = 0.5))
+# adding interactive elements to the plot
+interactive_year_plot <- ggplotly(year_plot)
+interactive_year_plot
+```
+
+
+
+**Was a particular day of the week more prone to accidents?**
+
+To generate relevant data, I will use aggregate functions to summarise 'number_of_accidents' based on the variable 'day_of_week'. 
+Here, We have a categorical variable in 'day_of_week' and numeric variable in 'number_of_accidents'. So a barplot will be quite useful 
+to display this relationship. We will find if any particular day/s of the week is/are more prone to the accidents by mapping day of week to 
+x axis and number of accidents to y axis.
+
+```{r}
+# using aggregate functions to summarise the number of accidents 
+# based on day of week and assigning it to the variable 'accidents_by_day'
+accidents_by_day <- sel_crashes_data %>% 
+  group_by(day_of_week) %>% 
+  summarise(number_of_accidents = n())
+accidents_by_day
+```
+
+```{r}
+# visualising the number of accidents by day of week using geom_bar
+day_plot <- ggplot(accidents_by_day, aes(x = day_of_week, y = number_of_accidents)) +
+            # white background with grid lines          
+            theme_bw() +
+            geom_bar(stat = "identity", color = "white") +
+            labs(x = "Day of Week", 
+                 y = "Number of Accidents", 
+                 title = "Distribution of Road Crashes By Day of Week") +
+            # center aligning the plot title
+            theme(plot.title = element_text(hjust = 0.5))
+# adding interactive elements to the plot
+interactive_day_plot <- ggplotly(day_plot)
+interactive_day_plot
+```
+
+
+
+**Was a particular time of the day(morning rush/evening rush) more prone to accidents?**
+
+In order to create a tibble of hour and number of accidents, first I need to extract hour from the variable 'accident_time'. Then
+use aggregate functions to calculate the number of accidents recorded by each hour. I will mostly use bar plots for the analysis 
+since we have many categorical variables in the dataset. We can find out how much of an impact rush hours has on the number of 
+accidents by mapping hour to x axis and number of accidents to y axis.
+
+```{r}
+# creating new 'hour' column
+sel_crashes_data$hour <- format(strptime(sel_crashes_data$accident_time, "%H:%M:%S"), "%H")
+
+# using aggregate functions to summarise the number of accidents 
+# by the hour and assigning it to the variable 'accidents_by_hour'
+accidents_by_hour <- sel_crashes_data %>% 
+  group_by(hour) %>% 
+  summarise(number_of_accidents = n())
+accidents_by_hour
+```
+
+
+```{r}
+# visualising the number of accidents by hour using geom_bar
+hour_plot <- ggplot(accidents_by_hour, aes(x = hour, y = number_of_accidents)) +
+             # white background with grid lines
+             theme_bw() +
+             geom_bar(stat = "identity") +
+             labs(x = "Hour", 
+                  y = "Number of Accidents", 
+                  title = "Distribution of Road Crashes By Hour") +
+             # center aligning the plot title
+             theme(plot.title = element_text(hjust = 0.5))
+# adding interactive elements to the plot
+interactive_hour_plot <- ggplotly(hour_plot)
+interactive_hour_plot
+```
+
+
+
+**How are the accidents distributed across regions? How does it trend over the years?**
+
+First, filter out the 'NA' values from 'region_name' to better represent the available data. Next step I map region name
+to x axis and assign 'year' to fill on a bar chart to see the relative proportion of yearly accidents by the region name. 
+Position adjustment is set to 'dodge' to arrange elements side by side. This will allow us to see the yearly trends in number
+of accidents for each individual region.
+
+```{r}
+# using filter to remove 'region_name' with 'NA' values
+sel_crashes_data <- sel_crashes_data %>% 
+  filter(region_name != "NA")
+
+# visualising the number of accidents by year and region using geom_bar
+region_plot <- ggplot(sel_crashes_data, aes(x = region_name, fill = year)) +
+               # white background with grid lines
+               theme_bw() +
+               geom_bar(position = "dodge") +
+               # adapting a colour palette particularly suited to display discreet values
+               scale_fill_brewer(palette = "Set2") +
+               labs(x = "Region", 
+                    y = "Number of Accidents", 
+                    title = "Distribution of Road Crashes By Year and Region",
+                    fill = "  Year") +
+               # center aligning the plot title
+               theme(plot.title = element_text(hjust = 0.5)) +
+               # rotating and spacing x label
+               theme(axis.text.x = element_text(angle = 30, vjust=0.5, hjust=1))
+# adding interactive elements to the plot
+interactive_region_plot <- ggplotly(region_plot)
+interactive_region_plot
+```
+
+
+
+
+**How are alcohol time and overall visibility contributed to the accidents?**
+
+I will again use filter function to remove insignificant values from 'light_condition' to get more coherent visualisation outcome. Then map
+light condition to x axis and assign 'alcoholtime' to fill on a bar chart to see the relative proportion of accidents by the light condition and 
+alcohol time. Alcohol times are defined as the following: Monday - Thursday 00:00 - 06:00 hours & 18:00 - 23:59 hours, Friday 00:00 - 06:00 hours 
+& 16:00 - 23:59 hours, Saturday 00:00 - 08:00 hours & 14:00 - 23:59 hours, Sunday 00:00 - 10:00 hours & 16:00 - 23:59 hours. I hope to find any 
+correlation between light condition/alcohol time and number of accidents.
+
+```{r}
+# using filter to remove 'light_condition' with 'Unk' and 'Dark Street lights unknown' values
+sel_crashes_data <- sel_crashes_data %>% 
+  filter(light_condition != "Unk.", light_condition != "Dark Street lights unknown")
+
+# visualising the factors of alcohol time and light condition to number of accidents using geom_bar
+light_plot <- ggplot(sel_crashes_data, aes(x = light_condition, fill = alcoholtime)) +
+              # white background with grid lines
+              theme_bw() +
+              geom_bar() +
+              # dividing plot into rectangular subplots
+              facet_wrap(~ alcoholtime) +
+              # adapting a colour palette particularly suited to display discreet values
+              scale_fill_brewer(palette = "Set2") +
+              labs(x = "Light Condition", 
+                   y = "Number of Accidents", 
+                   title = "Alcohol Time and Light Condition Factor to Vehicle Crashes",
+                   fill = "  Alcohol") +
+              # center aligning the plot title
+              theme(plot.title = element_text(hjust = 0.5)) +
+              # rotating and spacing x label
+              theme(axis.text.x = element_text(angle = 90, vjust=0.5, hjust=1)) +
+              # set legend position to top
+              theme(legend.position = "top")
+# adding interactive elements to the plot
+interactive_light_plot <- ggplotly(light_plot)
+interactive_light_plot
+
+```
+
+
+
+**How has the various speed zones affected the severity of the accidents?**
+
+We can find the impact of different speed limits on the severity of the accidents by producing a bar plot with aesthetic mapping of severity to x axis and 
+assigning 'speed_zone' to fill. This should give us a clear picture if higher speed limit has any correlation with the severity of the accidents.
+
+```{r}
+# using filter to remove insignificant values
+sel_crashes_data <- sel_crashes_data %>% 
+  filter(speed_zone != "Camping grounds or off road", speed_zone != "Not known", 
+         speed_zone != "Other speed limit", severity != "Non injury accident",
+         severity != "NA")
+
+# visualising accident severity by different speed zones using geom_bar
+speed_plot <- ggplot(sel_crashes_data, aes(x = severity, fill = speed_zone)) +
+              # white background with grid lines
+              theme_bw() +
+              geom_bar(position = "dodge") +
+              # adapting a colour palette particularly suited to display discreet values
+              scale_fill_brewer(palette = "Set3") +
+              labs(x = "Severity", 
+                   y = "Number of Accidents", 
+                   title = "Severity Distribution by Speed Limit",
+                   fill = "   Speed Zone") +
+              theme(legend.position = "bottom") +
+              # center aligning the plot title
+              theme(plot.title = element_text(hjust = 0.5))
+# adding interactive elements to the plot
+interactive_speed_plot <- ggplotly(speed_plot)
+interactive_speed_plot
+```
+
+
+
+**How does the collision type affect severity of the accidents?**
+
+To help us finding the answer for this, I map 'severity' to x axis and assign 'accident_type' to aesthetics parameter 'fill' on a
+bar chart. Position adjustment is set to 'dodge' to arrange elements side by side. This should show us accident severity relative
+to collusion type.
+
+```{r}
+# visualising accident severity by different speed zones using geom_bar
+accident_type_plot <- ggplot(sel_crashes_data, aes(x = severity, fill = accident_type)) +
+                      # white background with grid lines
+                      theme_bw() +
+                      geom_bar(position = "dodge") +
+                      # adapting a colour palette particularly suited to display discreet values
+                      scale_fill_brewer(palette = "Set3") +
+                      labs(x = "Severity", 
+                           y = "Number of Accidents", 
+                           title = "Accident Severity by Collision Type",
+                           fill = "  Accident Type") +
+                      # center aligning the plot title
+                      theme(plot.title = element_text(hjust = 0.5))
+# adding interactive elements to the plot
+interactive_accident_type_plot <- ggplotly(accident_type_plot)
+interactive_accident_type_plot
+```
+
+
+
+### Results
+
+These are the outcome of my analysis of 'Victoria Crashes Data' through the exploration and visualisation processes above:
+
+* As illustrated in the line chart 'Distribution of Road Crashes By Year', the yearly total peaked in 2014-15, steadily declined in 2017-18 
+and then significantly dropped in 2019. I suspect this drop in numbers is due to the strong road safety campaign undertaken by Department of 
+Transport, presence of more highway patrol on the road and use of various speed deterrents including red light/speed cameras might have been 
+a factor in reducing this number.
+
+* It seems number of accidents are pretty even throughout the weekdays except for on Friday. This makes sense since people are often more tired
+towards the end of the week, rushing to get home or away for a weekend trip. This may lead to less concentration on the road and more chance of 
+involving in an accident. Meanwhile, Saturday seems to be least likely day for an accident to happen.
+
+* It is evident that most of the accidents happen during the evening rush hours between 3pm and 6pm, not far behind is morning rush hour between 
+8am and 9am. Obviously, during the rush hours there is higher volumes of traffic on the road and drivers are more stressed to get to work in the 
+morning and rushing home in the evening.
+
+* Western Region has the lowest number of road crashes from 2014 to 2019, followed by North Eastern Region. On the other hand, Metropolitan
+South East Region has consistently high number of crashes, closely followed by Metropolitan North West Region. Both the Metropolitan 
+regions had a large decrease from 2018 to 2019 - shows that message is reaching across to the community and people are being more 
+cautious on the road. On the contrary, there was a steady reduction in number of accidents from 2015 to 2018 after really peaked in 2015. 
+Two Metropolitan Regions are the most populated in Victoria which is responsible for high number of accidents.
+
+* Vast majority of the accidents happen during the day and it is not greatly impacted by alcohol time. Because most hours of the alcohol time 
+belong to night time, hard to explain if the accidents at night has any relation with alcohol time. We certainly need more relevant data and 
+exploration on this front.
+
+* Major proportion of the accidents in 100 km/hr zone turn into fatal accidents. As the speed limit reduces, proportion of number of fatal 
+accidents compared to total number of accidents decreases. Most accidents happen in 60 km/hr zone probably due to the fact that 60km/hr covers 
+most of the urban traffic areas.
+
+* Perhaps it is not surprising to see collision with vehicle is the major contributor to overall accidents numbers, followed by collision with 
+a fixed object. But in terms of number of fatal accidents, these factors are evenly distributed. Disheartening to find out large numbers of 
+pedestrians involved in serious and other injury accidents probably due to excessive mobile usage, jaywalking and not paying close attention 
+while crossing the road.
+
+
+
+### Conclusion
+
+Data collection for 'Road Crashes Victoria' began in July 2014 and regularly being updated ever since. I did an analysis from 2014 to 2019 where 
+data is available for the entire year. The following trends were observed in the Victoria Road Crashes data:
+
+* Accident frequency has steadily been declining since 2015 and there was a sharp drop in 2019.
+* Friday seems to be the worst day for crashes to happen.
+* Vast majority of accidents occur during morning and evening rush hours.
+* Metropolitan South East Region and Metropolitan North West Region consistently have large number of crashes but this has been steadily 
+declining since 2015.
+* Most accidents happen in daytime, a relationship could not be established between alcohol time and number of accidents.
+* Accidents are more severe in higher speed zones even though most of the crashes take place in 50km/hr and 60km/hr zone.
+* Collision with another vehicle is the main contributor to overall accident number.
+
+
+
+### References
+
+Plotly. (2021). Plotly R open source graphing library. https://plotly.com/r/
+
+R Studio. (2021). RStudio cheatsheets. https://www.rstudio.com/resources/cheatsheets/
+
+Scientific Research. (2021). Road Traffic Crash Data: An overview on sources, problems and collection methods. https://www.scirp.org/journal/paperinformation.aspx?paperid=75975
+
+Tierney, N. (2021). Getting started with naniar. http://naniar.njtierney.com/articles/getting-started-w-naniar.html#introduction
+
+Tierney, N. (2020). RMarkdown for scientists. https://rmd4sci.njtierney.com/
+
+Victoria Department of Transport Open Data Hub. (2021). Road crashes for five years - Victoria. https://vicroadsopendata-vicroadsmaps.opendata.arcgis.com/datasets/vicroadsmaps::road-crashes-for-five-years-victoria/about
+
+Wickham, H. (2nd edition). Elegent graphics for data analysis. Springer.
+
+Wickham, H. & Grolemund, G. (2017). R for data science. O'Reilly Media , Inc..
